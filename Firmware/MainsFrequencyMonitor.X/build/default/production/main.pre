@@ -14654,6 +14654,8 @@ volatile bool acqGate = 0;
 volatile double acqHolder = 0;
 volatile double acqOut = 0;
 volatile bool missedCycle = 0;
+volatile int erroneousZeroCrossing = 0;
+volatile int acqErrZeroCross = 0;
 
 void main(void)
 {
@@ -14662,8 +14664,10 @@ ANSELA = 0x00;
 ANSELB = 0x00;
 ANSELC = 0x00;
 TRISB6 = 0;
-TRISB5 = 0;
+TRISB4 = 0;
+TRISC7 = 0;
 RB7PPS = 0b00010010;
+
 
 
 SYNC = 0;
@@ -14672,11 +14676,11 @@ SP1BRGL = 15;
 TXEN = 1;
 
 
-_delay((unsigned long)((1000)*(20000000.0/4000.0)));
+_delay((unsigned long)((2000)*(20000000.0/4000.0)));
 putch(22);
 _delay((unsigned long)((10)*(20000000.0/4000.0)));
-
-
+putch(17);
+_delay((unsigned long)((10)*(20000000.0/4000.0)));
 putch(12);
 _delay((unsigned long)((10)*(20000000.0/4000.0)));
 
@@ -14703,9 +14707,20 @@ PEIE = 1;
 GIE = 1;
 
 
-char hours = 20;
-char minutes = 12;
+char hours = 21;
+char minutes = 48;
 char seconds = 00;
+
+LATC7 = 0;
+
+
+LATB4 = 1;
+LATB6 = 1;
+_delay((unsigned long)((750)*(20000000.0/4000.0)));
+LATB4 = 0;
+LATB6 = 0;
+
+unsigned long int uptimeCounter = 0ul;
 
 while(1)
 {
@@ -14713,6 +14728,8 @@ if(acqGate)
 {
 acqGate = 0;
 LATB6 = 1;
+
+uptimeCounter++;
 
 seconds++;
 
@@ -14733,17 +14750,31 @@ hours = 00;
 }
 }
 
+double freqHolder = acqOut/(double)(60 - (acqErrZeroCross/2));
 
-printf(" FREQ: %7.5f     %02d:%02d:%02d    ", acqOut/(double)60, hours, minutes, seconds);
+
+putch(12);
+_delay((unsigned long)((2)*(20000000.0/4000.0)));
+printf("  FREQ: %5.3f      %02d:%02d:%02d    ", freqHolder, hours, minutes, seconds);
+
+
+LATC7 = 0;
+_delay((unsigned long)((1)*(20000000.0/4000.0)));
+printf("%5.3f,%d:%d:%d,%d\n\r",freqHolder, hours, minutes, seconds, uptimeCounter);
+_delay((unsigned long)((1)*(20000000.0/4000.0)));
+LATC7 = 1;
+
+
 acqOut = 0;
+acqErrZeroCross = 0;
 LATB6 = 0;
 
 if (missedCycle)
 {
-LATB5 = 0;
+LATB4 = 0;
 missedCycle = 0;
 } else {
-LATB5 = 1;
+LATB4 = 1;
 }
 }
 }
@@ -14758,8 +14789,23 @@ if (SMT1PRAIF)
 {
 SMT1PRAIF = 0;
 
+double measurementHolder = 20000000.0 / (double)SMT1CPR;
+
+if (measurementHolder < 130 && measurementHolder > 110)
+{
+erroneousZeroCrossing++;
+
+if (erroneousZeroCrossing % 2 == 0 && erroneousZeroCrossing > 0)
+{
 acqCounter++;
-acqHolder += 20000000.0 / (double)SMT1CPR;
+}
+}
+
+else
+{
+acqCounter++;
+acqHolder += measurementHolder;
+}
 
 if (acqCounter >= 60)
 {
@@ -14767,6 +14813,8 @@ acqCounter = 0;
 acqOut = acqHolder;
 acqGate = 1;
 acqHolder = 0;
+acqErrZeroCross = erroneousZeroCrossing;
+erroneousZeroCrossing = 0;
 }
 }
 

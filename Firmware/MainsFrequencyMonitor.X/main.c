@@ -1,5 +1,5 @@
 /* Mains Frequency Monitor Project
- * Version 0.3
+ * Version 0.5
  * 
  * By: Dan Watson
  * syncchannel.blogspot.com
@@ -53,6 +53,8 @@ volatile bool acqGate = false;
 volatile double acqHolder = 0;
 volatile double acqOut = 0;
 volatile bool missedCycle = false;
+volatile int erroneousZeroCrossing = 0;
+volatile int acqErrZeroCross = 0;
 
 void main(void)
 {
@@ -61,8 +63,10 @@ void main(void)
     ANSELB = 0x00;
     ANSELC = 0x00;
     TRISB6 = 0; // PB6 Output for LED
-    TRISB5 = 0; // PB5 Output for LED
+    TRISB4 = 0; // PB4 Output for LED
+    TRISC7 = 0; // RC7 Output for Tx Switch
     RB7PPS = 0b00010010; // Send USART TX to PB7
+    
     
     //EUSART setup
     SYNC = 0; // Async
@@ -71,11 +75,11 @@ void main(void)
     TXEN = 1; // Enable transmitter
     
     //Initialize LCD (Parallax 2x16 Backlit #27977)
-    __delay_ms(1000);
+    __delay_ms(2000);
     putch(22); // Display on, cursor off, no blink
     __delay_ms(10);
-    //putch(17); // Backlight on
-    //__delay_ms(10);
+    putch(17); // Backlight on
+    __delay_ms(10);
     putch(12); // Move cursor to 0,0
     __delay_ms(10);
     
@@ -102,9 +106,20 @@ void main(void)
     GIE = 1; // Global interrupt enable
     
     // Time Holders
-    char hours = 20;
-    char minutes = 12;
+    char hours = 21;
+    char minutes = 48;
     char seconds = 00;
+    
+    LATC7 = 0; // Set Tx Switch to LCD side (1)
+    
+    // Lamp Test
+    LATB4 = 1;
+    LATB6 = 1;
+    __delay_ms(750);
+    LATB4 = 0;
+    LATB6 = 0;
+    
+    unsigned long int uptimeCounter = 0ul;
     
     while(1)
     {
@@ -112,6 +127,8 @@ void main(void)
         {
             acqGate = false;
             LATB6 = 1; // Turn on second indicator LED
+            
+            uptimeCounter++; // Increment uptime counter
             
             seconds++; // Increment time
             
@@ -132,17 +149,31 @@ void main(void)
                 }
             } // Done incrementing time
             
+            double freqHolder = acqOut/(double)(MAINS_FREQ - (acqErrZeroCross/2));
+            
             // Update LCD display
-            printf(" FREQ: %7.5f     %02d:%02d:%02d    ", acqOut/(double)MAINS_FREQ, hours, minutes, seconds);
+            putch(12); // Move cursor to 0,0 to prepare for next send
+            __delay_ms(2);
+            printf("  FREQ: %5.3f      %02d:%02d:%02d    ", freqHolder, hours, minutes, seconds);
+            
+            // Output to serial terminal
+            LATC7 = 0;
+            __delay_ms(1);
+            printf("%5.3f,%d:%d:%d,%d\n\r",freqHolder, hours, minutes, seconds, uptimeCounter);
+            __delay_ms(1);
+            LATC7 = 1;
+            
+            // Clean up
             acqOut = 0;
+            acqErrZeroCross = 0;
             LATB6 = 0; // Turn off second indicator LED
             
             if (missedCycle) // Update missed cycle indicator LED
             {
-                LATB5 = 0;
+                LATB4 = 0;
                 missedCycle = false;
             } else {
-                LATB5 = 1;
+                LATB4 = 1;
             }
         }
     }
@@ -157,8 +188,23 @@ void interrupt ISR()
     {
         SMT1PRAIF = 0;
         
-        acqCounter++;
-        acqHolder += _XTAL_FREQ / (double)SMT1CPR;
+        double measurementHolder = _XTAL_FREQ / (double)SMT1CPR;
+        
+        if (measurementHolder < 130 && measurementHolder > 110)
+        {
+            erroneousZeroCrossing++;
+            
+            if (erroneousZeroCrossing % 2 == 0 && erroneousZeroCrossing > 0)
+            {
+                acqCounter++;
+            }
+        }
+        
+        else
+        {
+            acqCounter++;
+            acqHolder += measurementHolder;
+        }
         
         if (acqCounter >= MAINS_FREQ) // Trigger update in main loop
         {
@@ -166,6 +212,8 @@ void interrupt ISR()
             acqOut = acqHolder;
             acqGate = true;
             acqHolder = 0;
+            acqErrZeroCross = erroneousZeroCrossing;
+            erroneousZeroCrossing = 0;
         }
     }
     
